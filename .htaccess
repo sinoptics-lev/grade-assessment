@@ -1,0 +1,20 @@
+# Grade Assessment - Apache Configuration
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+    RewriteRule ^api/(.*)$ api/index.php?path=$1 [QSA,L]
+    RewriteRule ^ index.html [L]
+</IfModule>
+
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType image/* "access plus 1 month"
+    ExpiresByType text/css "access plus 1 week"
+    ExpiresByType application/javascript "access plus 1 week"
+</IfModule>
+
+<FilesMatch "^\.">Order allow,deny\nDeny from all</FilesMatch>
+<FilesMatch "\.(env|sql|log)$">Order allow,deny\nDeny from all</FilesMatch>
