@@ -1,6 +1,7 @@
 <?php
 /**
  * Grade Assessment - Auth API
+ * Аутентификация и авторизация
  */
 
 require_once __DIR__ . '/db.php';
@@ -9,31 +10,50 @@ $path = $_GET['path'] ?? '';
 
 try {
     switch ($path) {
-        case 'login': handleLogin(); break;
-        case 'register': handleRegister(); break;
-        case 'me': handleMe(); break;
-        case 'refresh': handleRefresh(); break;
-        default: jsonError('Неизвестный endpoint', 404);
+        case 'login':
+            handleLogin();
+            break;
+        case 'register':
+            handleRegister();
+            break;
+        case 'me':
+            handleMe();
+            break;
+        case 'refresh':
+            handleRefresh();
+            break;
+        default:
+            jsonError('Неизвестный endpoint', 404);
     }
 } catch (Exception $e) {
     jsonError('Внутренняя ошибка сервера', 500);
 }
 
+/**
+ * Авторизация
+ */
 function handleLogin() {
     $data = getJsonInput();
+    
     if (empty($data['username']) || empty($data['password'])) {
         jsonError('Логин и пароль обязательны');
     }
     
     $db = Database::getInstance();
-    $admin = $db->fetchOne("SELECT * FROM admins WHERE username = ? AND is_active = TRUE", [$data['username']]);
+    
+    $admin = $db->fetchOne(
+        "SELECT * FROM admins WHERE username = ? AND is_active = TRUE",
+        [$data['username']]
+    );
     
     if (!$admin || !password_verify($data['password'], $admin['password_hash'])) {
         jsonError('Неверный логин или пароль', 401);
     }
     
+    // Обновляем время входа
     $db->update('admins', ['last_login' => date('Y-m-d H:i:s')], 'id = ?', [$admin['id']]);
     
+    // Генерируем токен
     $token = generateJWT([
         'admin_id' => $admin['id'],
         'username' => $admin['username'],
@@ -43,23 +63,43 @@ function handleLogin() {
     jsonResponse([
         'success' => true,
         'token' => $token,
-        'user' => ['id' => $admin['id'], 'username' => $admin['username'], 'full_name' => $admin['full_name']]
+        'user' => [
+            'id' => $admin['id'],
+            'username' => $admin['username'],
+            'full_name' => $admin['full_name'],
+            'email' => $admin['email']
+        ]
     ]);
 }
 
+/**
+ * Регистрация нового администратора
+ */
 function handleRegister() {
+    // Для безопасности регистрация требует существующую авторизацию
     $auth = checkAuth();
+    
     $data = getJsonInput();
     
     if (empty($data['username']) || empty($data['password']) || empty($data['full_name'])) {
         jsonError('Логин, пароль и имя обязательны');
     }
     
-    $db = Database::getInstance();
-    $existing = $db->fetchOne("SELECT id FROM admins WHERE username = ?", [$data['username']]);
-    if ($existing) jsonError('Пользователь уже существует');
+    if (strlen($data['password']) < 6) {
+        jsonError('Пароль должен быть минимум 6 символов');
+    }
     
+    $db = Database::getInstance();
+    
+    // Проверяем уникальность
+    $existing = $db->fetchOne("SELECT id FROM admins WHERE username = ?", [$data['username']]);
+    if ($existing) {
+        jsonError('Пользователь с таким логином уже существует');
+    }
+    
+    // Создаем администратора
     $passwordHash = password_hash($data['password'], PASSWORD_BCRYPT);
+    
     $db->insert('admins', [
         'username' => $data['username'],
         'password_hash' => $passwordHash,
@@ -67,27 +107,54 @@ function handleRegister() {
         'email' => $data['email'] ?? null
     ]);
     
-    jsonResponse(['success' => true, 'message' => 'Администратор создан']);
+    jsonResponse([
+        'success' => true,
+        'message' => 'Администратор создан'
+    ]);
 }
 
+/**
+ * Получение данных текущего пользователя
+ */
 function handleMe() {
     $auth = checkAuth();
-    $db = Database::getInstance();
-    $admin = $db->fetchOne("SELECT id, username, full_name, email, is_active, created_at, last_login FROM admins WHERE id = ?", [$auth['admin_id']]);
-    if (!$admin) jsonError('Пользователь не найден', 404);
     
-    jsonResponse(['success' => true, 'user' => $admin]);
+    $db = Database::getInstance();
+    
+    $admin = $db->fetchOne(
+        "SELECT id, username, full_name, email, is_active, created_at, last_login 
+         FROM admins 
+         WHERE id = ?",
+        [$auth['admin_id']]
+    );
+    
+    if (!$admin) {
+        jsonError('Пользователь не найден', 404);
+    }
+    
+    jsonResponse([
+        'success' => true,
+        'user' => $admin
+    ]);
 }
 
+/**
+ * Обновление токена
+ */
 function handleRefresh() {
     $auth = checkAuth();
+    
+    // Генерируем новый токен
     $token = generateJWT([
         'admin_id' => $auth['admin_id'],
         'username' => $auth['username'],
         'role' => $auth['role']
     ]);
     
-    jsonResponse(['success' => true, 'token' => $token]);
+    jsonResponse([
+        'success' => true,
+        'token' => $token
+    ]);
 }
 
 function getJsonInput() {
