@@ -16,5 +16,11 @@
     ExpiresByType application/javascript "access plus 1 week"
 </IfModule>
 
-<FilesMatch "^\.">Order allow,deny\nDeny from all</FilesMatch>
-<FilesMatch "\.(env|sql|log)$">Order allow,deny\nDeny from all</FilesMatch>
+<FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+<FilesMatch "\.(env|sql|log)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
