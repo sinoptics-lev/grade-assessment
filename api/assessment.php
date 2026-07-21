@@ -82,7 +82,7 @@ function handleStart() {
         $question = getDefaultQuestion('hard', 2);
         logAIRequest($assessmentId, 'generate_first_question', $data, $result, $result['error']);
     } else {
-        $question = $result['data'];
+        $question = normalizeQuestion($result['data']);
         logAIRequest($assessmentId, 'generate_first_question', $data, $result, null, $result['duration_ms'] ?? 0);
     }
     
@@ -139,7 +139,7 @@ function handleGetQuestion() {
         $question = getAdaptiveFallbackQuestion($previousAnswers);
         logAIRequest($assessmentId, 'generate_next_question', $assessment, $result, $result['error']);
     } else {
-        $question = $result['data'];
+        $question = normalizeQuestion($result['data']);
         logAIRequest($assessmentId, 'generate_next_question', $assessment, $result, null, $result['duration_ms'] ?? 0);
     }
     
@@ -170,6 +170,24 @@ function handleSubmitAnswer() {
         jsonError('Оценка не найдена', 404);
     }
     
+    // Формируем текст ответа: выбранные варианты + опциональный комментарий
+    $selectedOptions = $data['selected_options'] ?? [];
+    if (!is_array($selectedOptions)) $selectedOptions = [];
+    $selectedOptions = array_values(array_filter(array_map('trim', array_map('strval', $selectedOptions))));
+    $comment = trim(strval($data['comment'] ?? ''));
+    
+    $answerText = trim(strval($data['answer'] ?? ''));
+    if (!empty($selectedOptions)) {
+        $answerText = 'Выбранные варианты: ' . implode('; ', $selectedOptions);
+        if ($comment !== '') {
+            $answerText .= "\nКомментарий: " . $comment;
+        }
+    }
+    
+    if ($answerText === '') {
+        jsonError('Выберите хотя бы один вариант ответа');
+    }
+    
     // Сохраняем ответ
     $answerData = [
         'assessment_id' => $assessmentId,
@@ -177,41 +195,41 @@ function handleSubmitAnswer() {
         'question_category' => $data['question']['category'] ?? 'general',
         'question_subcategory' => $data['question']['subcategory'] ?? '',
         'difficulty_level' => intval($data['question']['difficulty'] ?? 2),
-        'answer_text' => $data['answer'] ?? '',
+        'answer_text' => $answerText,
         'max_score' => 10
     ];
     
     // Оцениваем ответ через AI
-    if (!empty($data['answer'])) {
-        $ai = new DeepseekAPI();
-        $expectedTopics = $data['question']['expected_topics'] ?? [];
-        $difficulty = $data['question']['difficulty'] ?? 2;
+    $ai = new DeepseekAPI();
+    $expectedTopics = $data['question']['expected_topics'] ?? [];
+    $difficulty = $data['question']['difficulty'] ?? 2;
+    $questionOptions = $data['question']['options'] ?? [];
+    
+    $result = $ai->evaluateAnswer(
+        $answerData['question_text'],
+        $answerText,
+        $expectedTopics,
+        $difficulty,
+        is_array($questionOptions) ? $questionOptions : []
+    );
+    
+    if (!isset($result['error']) && is_array($result['data'])) {
+        $evalData = $result['data'];
+        $answerData['score_earned'] = intval($evalData['score'] ?? 5);
+        $answerData['is_correct'] = ($answerData['score_earned'] >= 6);
+        $answerData['ai_evaluation'] = json_encode([
+            'feedback' => $evalData['feedback'] ?? '',
+            'covered_topics' => $evalData['covered_topics'] ?? [],
+            'missed_topics' => $evalData['missed_topics'] ?? [],
+            'level_demonstrated' => $evalData['level_demonstrated'] ?? 'middle'
+        ], JSON_UNESCAPED_UNICODE);
         
-        $result = $ai->evaluateAnswer(
-            $answerData['question_text'],
-            $data['answer'],
-            $expectedTopics,
-            $difficulty
-        );
-        
-        if (!isset($result['error']) && is_array($result['data'])) {
-            $evalData = $result['data'];
-            $answerData['score_earned'] = intval($evalData['score'] ?? 5);
-            $answerData['is_correct'] = ($answerData['score_earned'] >= 6);
-            $answerData['ai_evaluation'] = json_encode([
-                'feedback' => $evalData['feedback'] ?? '',
-                'covered_topics' => $evalData['covered_topics'] ?? [],
-                'missed_topics' => $evalData['missed_topics'] ?? [],
-                'level_demonstrated' => $evalData['level_demonstrated'] ?? 'middle'
-            ], JSON_UNESCAPED_UNICODE);
-            
-            logAIRequest($assessmentId, 'evaluate_answer', $answerData, $result, null, $result['duration_ms'] ?? 0);
-        } else {
-            // Ручная оценка если AI недоступен
-            $answerData['score_earned'] = estimateScoreManually($data['answer']);
-            $answerData['is_correct'] = ($answerData['score_earned'] >= 6);
-            logAIRequest($assessmentId, 'evaluate_answer', $answerData, $result, $result['error'] ?? 'Fallback');
-        }
+        logAIRequest($assessmentId, 'evaluate_answer', $answerData, $result, null, $result['duration_ms'] ?? 0);
+    } else {
+        // Ручная оценка если AI недоступен
+        $answerData['score_earned'] = estimateScoreManually($answerText);
+        $answerData['is_correct'] = ($answerData['score_earned'] >= 6);
+        logAIRequest($assessmentId, 'evaluate_answer', $answerData, $result, $result['error'] ?? 'Fallback');
     }
     
     $db->insert('answers', $answerData);
@@ -373,6 +391,10 @@ function estimateCurrentLevel($answers) {
 }
 
 function estimateScoreManually($answer) {
+    // Для закрытых вопросов без AI ставим нейтральный балл
+    if (mb_strpos($answer, 'Выбранные варианты:') === 0) {
+        return mb_strlen($answer) > 150 ? 6 : 5;
+    }
     $length = mb_strlen($answer);
     if ($length < 20) return 2;
     if ($length < 50) return 4;
@@ -449,33 +471,106 @@ function generateFinalReport($assessmentId, $assessment, $answers) {
     }
 }
 
+/**
+ * Нормализует вопрос от AI: гарантирует наличие типа и вариантов ответов.
+ * Если AI вернул открытый вопрос без вариантов — заменяет на fallback.
+ */
+function normalizeQuestion($q) {
+    if (!is_array($q) || empty($q['question'])) {
+        return getDefaultQuestion('hard', 2);
+    }
+    
+    $type = $q['question_type'] ?? '';
+    $options = $q['options'] ?? [];
+    if (is_array($options)) {
+        $options = array_values(array_filter(array_map('trim', array_map('strval', $options))));
+    } else {
+        $options = [];
+    }
+    
+    if (!in_array($type, ['single', 'multiple']) || count($options) < 3) {
+        return getDefaultQuestion($q['skill_type'] ?? 'hard', intval($q['difficulty'] ?? 2));
+    }
+    
+    $q['question_type'] = $type;
+    $q['options'] = $options;
+    if (empty($q['expected_topics']) || !is_array($q['expected_topics'])) {
+        $q['expected_topics'] = [];
+    }
+    if (empty($q['skill_type']) || !in_array($q['skill_type'], ['hard', 'soft'])) {
+        $q['skill_type'] = 'hard';
+    }
+    $q['difficulty'] = max(1, min(4, intval($q['difficulty'] ?? 2)));
+    
+    return $q;
+}
+
 function getDefaultQuestion($type, $difficulty) {
     $questions = [
         'hard' => [
             [
-                'question' => 'Опишите процесс сбора требований от стейкхолдеров. Какие техники используете и почему?',
+                'question' => 'Какая техника сбора требований наиболее эффективна, когда стейкхолдеры плохо представляют, что им нужно?',
+                'question_type' => 'single',
+                'options' => [
+                    'Анкетирование с закрытыми вопросами',
+                    'Прототипирование и демонстрация макетов',
+                    'Формальное интервью по жёсткому сценарию',
+                    'Анализ существующей документации'
+                ],
                 'category' => 'сбор_требований',
                 'subcategory' => 'elicitation',
                 'difficulty' => 2,
-                'expected_topics' => ['интервью', 'опросники', 'workshop', 'observation', 'прототипирование'],
+                'expected_topics' => ['прототипирование', 'интервью', 'workshop'],
                 'skill_type' => 'hard'
             ],
             [
-                'question' => 'Чем отличается User Story от Use Case? Приведите примеры использования каждого подхода.',
+                'question' => 'Отметьте обязательные элементы качественной User Story:',
+                'question_type' => 'multiple',
+                'options' => [
+                    'Роль пользователя (As a...)',
+                    'Цель/действие (I want...)',
+                    'Ценность/результат (So that...)',
+                    'Критерии приёмки',
+                    'Подробное описание UI-элементов и их координат',
+                    'Оценка трудозатрат в человеко-днях от разработчика'
+                ],
                 'category' => 'документирование',
                 'subcategory' => 'user_stories',
                 'difficulty' => 2,
-                'expected_topics' => ['user story', 'use case', 'формат', 'критерии приемки'],
+                'expected_topics' => ['user story', 'критерии приемки', 'формат'],
                 'skill_type' => 'hard'
             ]
         ],
         'soft' => [
             [
-                'question' => 'Как вы взаимодействуете с командой разработки, когда получаете от них pushback по требованиям?',
+                'question' => 'Команда разработки отклоняет ваши требования как нереализуемые. Ваши первые шаги?',
+                'question_type' => 'single',
+                'options' => [
+                    'Настоять на своём — требования согласованы с заказчиком',
+                    'Выяснить технические причины отказа и вместе найти компромисс',
+                    'Эскалировать конфликт на руководителя разработки',
+                    'Переписать требования, полностью сняв спорные пункты'
+                ],
                 'category' => 'коммуникация',
                 'subcategory' => 'negotiation',
                 'difficulty' => 2,
-                'expected_topics' => ['переговоры', 'компромисс', 'обоснование', 'данные'],
+                'expected_topics' => ['переговоры', 'компромисс', 'обоснование'],
+                'skill_type' => 'soft'
+            ],
+            [
+                'question' => 'Отметьте признаки эффективного управления стейкхолдерами:',
+                'question_type' => 'multiple',
+                'options' => [
+                    'Регулярная карта стейкхолдеров (влияние/интерес)',
+                    'План коммуникаций под каждую группу',
+                    'Вовлечение ключевых лиц на ранних этапах',
+                    'Коммуникация только через официальные письма',
+                    'Ожидание, пока стейкхолдеры сами выразят мнение'
+                ],
+                'category' => 'управление_стейкхолдерами',
+                'subcategory' => 'stakeholder_management',
+                'difficulty' => 2,
+                'expected_topics' => ['карта стейкхолдеров', 'коммуникации', 'вовлечение'],
                 'skill_type' => 'soft'
             ]
         ]
