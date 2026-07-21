@@ -86,7 +86,7 @@ export default function HomePage() {
               <Card><CardContent className="pt-6">
                 <TrendingUp className="w-8 h-8 text-primary mb-3" />
                 <h3 className="font-semibold mb-1">Объективная оценка</h3>
-                <p className="text-sm text-slate-500">AI анализирует глубину ответов</p>
+                <p className="text-sm text-slate-500">AI оценивает выбранные ответы</p>
               </CardContent></Card>
               <Card><CardContent className="pt-6">
                 <Users className="w-8 h-8 text-primary mb-3" />
@@ -98,7 +98,7 @@ export default function HomePage() {
               <h4 className="font-semibold text-blue-900 mb-2">Как это работает?</h4>
               <ol className="space-y-2 text-sm text-blue-800">
                 <li>1. Заполните форму — укажите позицию и опыт</li>
-                <li>2. Отвечайте на вопросы — они адаптируются под уровень</li>
+                <li>2. Выбирайте варианты ответов — вопросы адаптируются под уровень</li>
                 <li>3. Получите детальный отчёт с рекомендациями</li>
               </ol>
             </div>

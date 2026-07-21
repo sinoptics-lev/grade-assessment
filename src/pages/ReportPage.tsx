@@ -136,7 +136,7 @@ export default function ReportPage() {
                     <Badge variant={ans.score >= 7 ? 'default' : ans.score >= 4 ? 'secondary' : 'destructive'}>{ans.score}/{ans.max_score}</Badge>
                   </div>
                   <p className="font-medium mb-2">{ans.question}</p>
-                  <p className="text-sm text-slate-600 mb-3 bg-slate-50 p-3 rounded">{ans.answer}</p>
+                  <p className="text-sm text-slate-600 mb-3 bg-slate-50 p-3 rounded whitespace-pre-line">{ans.answer}</p>
                   {ans.feedback && <p className="text-sm text-slate-500 italic">{ans.feedback}</p>}
                 </CardContent></Card>)}
               </TabsContent>

@@ -1,5 +1,7 @@
 export interface Question {
   question: string;
+  question_type?: 'single' | 'multiple';
+  options?: string[];
   category: string;
   subcategory: string;
   difficulty: number;
