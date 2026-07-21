@@ -84,7 +84,8 @@ class DeepseekAPI {
         
         $userPrompt = "Начни оценку $position с опытом работы $experience лет. 
 Сгенерируй ПЕРВЫЙ вопрос для определения уровня специалиста (junior/middle/senior/lead).
-Верни JSON с полями: question, category, subcategory, difficulty, expected_topics, skill_type";
+Вопрос должен быть ЗАКРЫТЫМ (с вариантами ответов).
+Верни JSON с полями: question, question_type, options, category, subcategory, difficulty, expected_topics, skill_type";
 
         return $this->callAPI([
             ['role' => 'system', 'content' => $systemPrompt],
@@ -102,7 +103,8 @@ class DeepseekAPI {
 Текущий предполагаемый уровень: $detectedLevel.
 Пройдено вопросов: " . count($previousAnswers) . "/15.
 Контекст предыдущих ответов:\n$context\n
-Сгенерируй СЛЕДУЮЩИЙ вопрос. Верни JSON с полями: question, category, subcategory, difficulty, expected_topics, skill_type, reasoning";
+Сгенерируй СЛЕДУЮЩИЙ вопрос. Вопрос должен быть ЗАКРЫТЫМ (с вариантами ответов).
+Верни JSON с полями: question, question_type, options, category, subcategory, difficulty, expected_topics, skill_type, reasoning";
 
         return $this->callAPI([
             ['role' => 'system', 'content' => $systemPrompt],
@@ -110,10 +112,15 @@ class DeepseekAPI {
         ], 0.75);
     }
     
-    public function evaluateAnswer($question, $answer, $expectedTopics, $difficulty) {
+    public function evaluateAnswer($question, $answer, $expectedTopics, $difficulty, $options = []) {
         $systemPrompt = "Ты эксперт по оценке компетенций аналитиков. Оцени ответ строго и объективно.";
         
-        $userPrompt = "Оцени ответ по 10-балльной шкале.\n\nВопрос: $question\nОжидаемые темы: " . implode(', ', $expectedTopics) . "\nСложность: $difficulty/4\n\nОтвет: $answer\n\nВерни JSON: score (0-10), is_correct, feedback, covered_topics, missed_topics, level_demonstrated";
+        $optionsText = '';
+        if (!empty($options)) {
+            $optionsText = "\nВарианты ответов: " . implode(' | ', $options);
+        }
+        
+        $userPrompt = "Оцени ответ по 10-балльной шкале.\n\nВопрос: $question$optionsText\nОжидаемые темы: " . implode(', ', $expectedTopics) . "\nСложность: $difficulty/4\n\nОтвет кандидата (выбранные варианты и, возможно, комментарий): $answer\n\nКритерии оценки:\n- Полнота и корректность выбранных вариантов — основной критерий\n- Если есть комментарий: он может повысить оценку при наличии практических деталей\n\nВерни JSON: score (0-10), is_correct, feedback, covered_topics, missed_topics, level_demonstrated";
 
         return $this->callAPI([
             ['role' => 'system', 'content' => $systemPrompt],
@@ -145,6 +152,11 @@ class DeepseekAPI {
 Категории soft skills: коммуникация, управление стейкхолдерами, критическое мышление, презентация результатов, обучаемость.
 
 Уровни: 1-Junior, 2-Middle, 3-Senior, 4-Lead.
+
+Формат вопросов — ЗАКРЫТЫЕ (с вариантами ответов), чтобы кандидат не писал развёрнутый текст:
+- question_type: \"single\" (один правильный/лучший вариант) или \"multiple\" (чек-лист — несколько корректных вариантов).
+- options: массив из 4-6 вариантов ответа. Варианты должны быть реалистичными, с правдоподобными дистракторами; для \"multiple\" корректных вариантов должно быть 2-4.
+- Вопросы должны проверять реальные знания и практический опыт, а не способность формулировать.
 
 Всегда отвечай на русском. Верни только JSON без дополнительного текста.";
     }
